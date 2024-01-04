@@ -22,7 +22,23 @@ common common
         bytestring,
         text,
 
+common executable
+    import:           common
+    build-depends:    course-planning
+
 library
     import:           common
     hs-source-dirs:   lib
     exposed-modules:  CoursePlanning.Course
+
+executable scraper
+    import:           executable
+    hs-source-dirs:   scraper
+    main-is:          Main.hs
+    build-depends:
+        tagsoup,
+        scalpel-core,
+        split,
+        extra,
+        transformers,
+        pretty-simple,

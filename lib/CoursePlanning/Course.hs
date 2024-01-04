@@ -64,3 +64,27 @@ pattern ReqCourse' subj code grade = ReqCourse (CourseName subj code) grade
 pattern ReqCoCourse' :: Text -> Text -> Req
 pattern ReqCoCourse' subj code = ReqCoCourse (CourseName subj code)
 
+simplifyReq :: Req -> Req
+simplifyReq r = case r of
+  ReqCourse _ _ -> r
+  ReqCoCourse _ -> r
+  ReqNot (ReqNot r) -> simplifyReq r
+  ReqNot ReqTrue -> ReqFalse
+  ReqNot ReqFalse -> ReqTrue
+  ReqNot r -> ReqNot $ simplifyReq r
+  ReqAnd rs -> desingleton ReqAnd $ fromMaybe [] $ foldr stepAnd (Just []) rs
+  ReqOr rs -> desingleton ReqOr $ fromMaybe [] $ foldr stepOr (Just []) rs
+  ReqNote _ -> r
+ where
+  desingleton _ [r] = r
+  desingleton f rs = f rs
+  stepAnd r acc = case simplifyReq r of
+    ReqTrue -> acc
+    ReqFalse -> Nothing
+    ReqAnd rs -> (rs ++) <$> acc
+    r -> (r :) <$> acc
+  stepOr r acc = case simplifyReq r of
+    ReqTrue -> Nothing
+    ReqFalse -> acc
+    ReqOr rs -> (rs ++) <$> acc
+    r -> (r :) <$> acc
