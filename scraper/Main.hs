@@ -142,7 +142,9 @@ tokenIgnore =
 
 tokenSpecialText :: [Text]
 tokenSpecialText =
-  [
+  [ "4U Calculus and Vectors" -- MATH
+  , "CO 370 taken prior to winter 2004" -- CO 372
+  , "any STAT course" -- STAT 316
   ]
 
 tokenCode :: Text -> Bool
