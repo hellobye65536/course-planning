@@ -18,7 +18,7 @@ common common
         -Wall
     default-language: Haskell2010
     build-depends:
-        base,
+        base >=4.18 && <5,
         bytestring,
         text,
 
