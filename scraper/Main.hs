@@ -284,8 +284,8 @@ lexChunk = (get >>=) $ \case
     | ';' <- c -> pure []
     | '.' <- c -> pure []
     | '"' <- c -> do
-      let (r, t') = T.break (/='"') t'
-      put $ T.tail t'
+      let (r, t'') = T.span (/='"') t'
+      put $ T.tail t''
       rs <- lexChunk
       pure $ (LexRawPureText r : rs)
     | isText c -> do
