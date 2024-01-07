@@ -1,4 +1,3 @@
-{-# LANGUAGE PatternSynonyms #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
 module CoursePlanning.Course where
