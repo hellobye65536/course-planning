@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
@@ -13,18 +12,18 @@ data Season = Fall | Winter | Summer
   deriving (Eq, Show, Read)
 
 data CourseName = CourseName
-  { courseSubject :: Text
-  , courseCode :: Text
+  { courseSubject :: {-# UNPACK #-} !Text,
+    courseCode :: {-# UNPACK #-} !Text
   }
   deriving (Eq)
 
 instance Show CourseName where
   showsPrec prec (CourseName subj code) =
-    showParen (prec > 10)
-      $ showString "CourseName "
-      . showsPrec 11 subj
-      . showString " "
-      . showsPrec 11 code
+    showParen (prec > 10) $
+      showString "CourseName "
+        . showsPrec 11 subj
+        . showString " "
+        . showsPrec 11 code
 
 instance Read CourseName where
   readPrec = parens $ prec 10 $ do
@@ -32,16 +31,16 @@ instance Read CourseName where
     CourseName <$> step readPrec <*> step readPrec
 
 data Course = Course
-  { courseName :: CourseName
-  , courseId :: Text
-  , courseComponents :: [Text]
-  , courseUnits :: Float
-  , courseTitle :: Text
-  , courseDescription :: Text
-  , courseNote :: Text
-  , courseOffered :: [Season]
-  , courseReq :: Req
-  , courseCrosslist :: [CourseName]
+  { courseName :: {-# UNPACK #-} !CourseName,
+    courseId :: Text,
+    courseComponents :: [Text],
+    courseUnits :: Float,
+    courseTitle :: Text,
+    courseDescription :: Text,
+    courseNote :: Text,
+    courseOffered :: [Season],
+    courseReq :: Req,
+    courseCrosslist :: [CourseName]
   }
   deriving (Show, Read)
 
@@ -75,16 +74,16 @@ simplifyReq r = case r of
   ReqAnd rs -> desingleton ReqAnd $ fromMaybe [] $ foldr stepAnd (Just []) rs
   ReqOr rs -> desingleton ReqOr $ fromMaybe [] $ foldr stepOr (Just []) rs
   ReqNote _ -> r
- where
-  desingleton _ [r] = r
-  desingleton f rs = f rs
-  stepAnd r acc = case simplifyReq r of
-    ReqTrue -> acc
-    ReqFalse -> Nothing
-    ReqAnd rs -> (rs ++) <$> acc
-    r -> (r :) <$> acc
-  stepOr r acc = case simplifyReq r of
-    ReqTrue -> Nothing
-    ReqFalse -> acc
-    ReqOr rs -> (rs ++) <$> acc
-    r -> (r :) <$> acc
+  where
+    desingleton _ [r] = r
+    desingleton f rs = f rs
+    stepAnd r acc = case simplifyReq r of
+      ReqTrue -> acc
+      ReqFalse -> Nothing
+      ReqAnd rs -> (rs ++) <$> acc
+      r -> (r :) <$> acc
+    stepOr r acc = case simplifyReq r of
+      ReqTrue -> Nothing
+      ReqFalse -> acc
+      ReqOr rs -> (rs ++) <$> acc
+      r -> (r :) <$> acc
