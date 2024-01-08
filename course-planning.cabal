@@ -18,18 +18,27 @@ common common
         -Wall
     default-language: Haskell2010
     default-extensions:
+        DataKinds,
+        DuplicateRecordFields,
+        FlexibleInstances,
         LambdaCase,
+        MultiParamTypeClasses,
         MultiWayIf,
+        NoFieldSelectors,
         OverloadedLabels,
+        OverloadedRecordDot,
         PatternSynonyms,
         TupleSections,
+        TypeFamilies,
+        TypeOperators,
+        UndecidableInstances,
         ViewPatterns,
     build-depends:
         base >=4.18 && <5,
         bytestring,
         text,
         transformers,
-        mtl,
+        optics,
 
 common executable
     import:           common

@@ -1,19 +1,21 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Main where
+module Main (main) where
 
-import Control.Monad.Trans.State (State, get, put, runState)
+import Control.Monad.Trans.State (State, execState, get, put, runState)
 import CoursePlanning.Course
 import qualified Data.ByteString as B
 import Data.Char (isAlpha, isAlphaNum, isAsciiUpper, isDigit, isSpace)
-import Data.Foldable (asum)
+import Data.Foldable (asum, traverse_)
 import Data.Functor (($>))
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
+import Optics (assign, makeFieldLabelsNoPrefix, modifying, over, use, view, (&))
 import Text.HTML.Scalpel.Core
   ( ScraperT,
     Selector,
@@ -26,68 +28,6 @@ import Text.HTML.Scalpel.Core
   )
 import Text.Pretty.Simple (pPrint)
 import Prelude hiding (lex)
-
-classesSelector :: Selector
-classesSelector = AnyTag @: ["class" @= "divTable"]
-
-courseScraper :: (Monad m) => ScraperT Text m Course
-courseScraper = do
-  subs <- map T.strip <$> texts "div"
-  let (subj, code, comp, units) = case T.splitOn " " (subs !! 1) of
-        [subj, code, comp, units] -> (subj, code, comp, units)
-        _ -> error "failed to find course info"
-      cid = case T.stripPrefix "Course ID: " (subs !! 2) of
-        Just cid -> cid
-        _ -> error "failed to find course id"
-      course =
-        scrapeRest
-          (drop 5 subs)
-          Course
-            { courseName = CourseName subj code,
-              courseId = cid,
-              courseComponents = T.splitOn "," comp,
-              courseUnits = read $ T.unpack units,
-              courseTitle = subs !! 3,
-              courseDescription = subs !! 4,
-              courseNote = "",
-              courseOffered = [],
-              courseReq = ReqTrue,
-              courseCrosslist = []
-            }
-      course' = course {courseReq = simplifyReq $ courseReq course}
-  pure course'
-  where
-    scrapeRest :: [Text] -> Course -> Course
-    scrapeRest [] course = course
-    scrapeRest (sub : subs) course
-      | T.all isSpace sub =
-          scrapeRest subs course
-      | "[Note: " `T.isPrefixOf` sub =
-          scrapeRest subs course {courseNote = sub}
-      | Just prereqs <- T.stripPrefix "Prereq:" sub =
-          scrapeRest subs course {courseReq = ReqAnd [courseReq course, parse parseCtxPrereq $ lex prereqs]}
-      | Just coreqs <- T.stripPrefix "Coreq:" sub =
-          scrapeRest subs course {courseReq = ReqAnd [courseReq course, parse parseCtxCoreq $ lex coreqs]}
-      | Just antireqs <- T.stripPrefix "Antireq:" sub =
-          scrapeRest subs course {courseReq = ReqAnd [courseReq course, ReqNot (parse parseCtxAntireq $ lex antireqs)]}
-      | Just crosslisted <- T.stripPrefix "(Cross-listed with " sub =
-          scrapeRest subs course {courseCrosslist = parseCrosslist $ T.init crosslisted}
-      | Just _online <- T.stripSuffix " offered Online" sub =
-          scrapeRest subs course
-      | Just _consent <- T.stripSuffix " Consent Required" sub =
-          scrapeRest subs course
-      | Just _offered <- T.stripPrefix "Offered at " sub =
-          scrapeRest subs course
-      | Just _offered <- T.stripPrefix "Also offered at " sub =
-          scrapeRest subs course
-      | otherwise =
-          error $ "unknown text: " ++ show sub
-
-parseCrosslist :: Text -> [CourseName]
-parseCrosslist = map (go . T.splitOn " ") . T.splitOn ", "
-  where
-    go [subj, code] = CourseName subj code
-    go _ = error "bad course in crosslist"
 
 data LexToken
   = LexTokenText Text
@@ -299,50 +239,50 @@ lexChunk = (get >>=) $ \case
 type CourseReqBuilder = Text -> Text -> Maybe Float -> Req
 
 data ParseCtx = ParseCtx
-  { parseCtxCRB :: CourseReqBuilder,
-    parseCtxGrouper :: [Req] -> Req,
-    parseCtxGrade :: Maybe Float
+  { crb :: CourseReqBuilder,
+    grouper :: [Req] -> Req,
+    grade :: Maybe Float
   }
 
 data ParseState = ParseState
-  { parseStateTk :: [LexToken],
-    parseStateSubj :: Maybe Text
+  { tokens :: [LexToken],
+    subj :: Maybe Text
   }
 
 type ParseM = State ParseState
 
-getTk :: ParseM [LexToken]
-getTk = parseStateTk <$> get
+makeFieldLabelsNoPrefix ''ParseCtx
+makeFieldLabelsNoPrefix ''ParseState
 
-putTk :: [LexToken] -> ParseM ()
-putTk tk = get >>= (\ps -> put ps {parseStateTk = tk})
+getTokens :: ParseM [LexToken]
+getTokens = use #tokens
+
+putTokens :: [LexToken] -> ParseM ()
+putTokens = assign #tokens
 
 getSubj :: ParseM Text
-getSubj = fromMaybe (error "missing subject") . parseStateSubj <$> get
+getSubj = fromMaybe (error "missing subject") <$> use #subj
 
 putSubj :: Text -> ParseM ()
-putSubj subj = get >>= (\ps -> put ps {parseStateSubj = Just subj})
+putSubj = assign #subj . Just
 
 parseCtxDefault, parseCtxPrereq, parseCtxCoreq, parseCtxAntireq :: ParseCtx
 parseCtxDefault =
   ParseCtx
-    { parseCtxCRB = \_ _ _ -> error "undefined parseCtxCRB",
-      parseCtxGrouper = ReqAnd,
-      parseCtxGrade = Nothing
+    { crb = \_ _ _ -> error "undefined parseCtxCRB",
+      grouper = ReqAnd,
+      grade = Nothing
     }
-parseCtxPrereq = parseCtxDefault {parseCtxCRB = ReqCourse'}
-parseCtxCoreq = parseCtxDefault {parseCtxCRB = coreqCRB}
-parseCtxAntireq = parseCtxDefault {parseCtxCRB = coreqCRB, parseCtxGrouper = ReqOr}
-
-parseCtxGrouperForce :: ParseCtx -> [Req] -> Req
-parseCtxGrouperForce = parseCtxGrouper
+parseCtxPrereq = parseCtxDefault {crb = ReqCourse'}
+parseCtxCoreq = parseCtxDefault {crb = coreqCRB}
+parseCtxAntireq = parseCtxDefault {crb = coreqCRB, grouper = ReqOr}
 
 coreqCRB :: CourseReqBuilder
 coreqCRB subj code Nothing = ReqCoCourse' subj code
 coreqCRB _ _ (Just _) = error "unexpected grade in corequisite req"
 
 parse :: ParseCtx -> [LexToken] -> Req
-parse ctx ts = case parseStateTk <$> runState (parseOuter ctx) (ParseState ts Nothing) of
+parse ctx ts = case view #tokens <$> runState (parseOuter ctx) (ParseState ts Nothing) of
   (r, []) -> r
   (_, ts) -> error $ "unparsed tokens: " ++ show ts
 
@@ -350,19 +290,19 @@ parseFin :: ParseCtx -> [Req] -> Req
 parseFin ctx = \case
   [] -> ReqTrue
   [r] -> r
-  rs -> parseCtxGrouperForce ctx $ reverse rs
+  rs -> ctx.grouper $ reverse rs
 
 parseOuter :: ParseCtx -> ParseM Req
 parseOuter ctx = go ctx []
   where
     go :: ParseCtx -> [Req] -> ParseM Req
-    go ctx acc = (getTk >>=) $ \case
+    go ctx acc = (getTokens >>=) $ \case
       [] -> pure $ parseFin ctx acc
-      (LexTokenBigSep : ts) -> putTk ts *> go ctx acc
+      (LexTokenBigSep : ts) -> putTokens ts *> go ctx acc
       (LexTokenAnd : ts) ->
-        putTk ts *> go ctx {parseCtxGrouper = ReqAnd} acc
+        putTokens ts *> go ctx {grouper = ReqAnd} acc
       (LexTokenOr : ts) ->
-        putTk ts *> go ctx {parseCtxGrouper = ReqOr} acc
+        putTokens ts *> go ctx {grouper = ReqOr} acc
       _ -> parseInner ctx >>= (go ctx . (: acc))
 
 parseInner :: ParseCtx -> ParseM Req
@@ -372,33 +312,33 @@ parseInner ctx = go ctx []
     go ctx acc = step ctx
       where
         step :: ParseCtx -> ParseM Req
-        step ctx' = (getTk >>=) $ \case
+        step ctx' = (getTokens >>=) $ \case
           [] -> pure $ parseFin ctx acc
           (LexTokenBigSep : _) -> pure $ parseFin ctx acc
           (LexTokenGroup group : ts) -> do
-            putTk group
-            r <- parseOuter ctx' {parseCtxGrouper = ReqAnd}
-            getTk >>= \case
+            putTokens group
+            r <- parseOuter ctx' {grouper = ReqAnd}
+            getTokens >>= \case
               [] -> pure ()
               ts -> error $ "unparsed tokens: " ++ show ts
-            putTk ts
+            putTokens ts
             go ctx (r : acc)
           (LexTokenOneOf : ts) -> do
-            putTk ts
-            r <- parseInner ctx' {parseCtxGrouper = ReqOr}
+            putTokens ts
+            r <- parseInner ctx' {grouper = ReqOr}
             pure $ parseFin ctx (r : acc)
           (LexTokenSep : ts) ->
-            putTk ts *> go ctx acc
+            putTokens ts *> go ctx acc
           (LexTokenAnd : ts) ->
-            putTk ts *> go ctx {parseCtxGrouper = ReqAnd} acc
+            putTokens ts *> go ctx {grouper = ReqAnd} acc
           (LexTokenOr : ts) ->
-            putTk ts *> go ctx {parseCtxGrouper = ReqOr} acc
+            putTokens ts *> go ctx {grouper = ReqOr} acc
           (LexTokenText t : ts) ->
-            putTk ts *> go ctx (ReqNote t : acc)
+            putTokens ts *> go ctx (ReqNote t : acc)
           (LexTokenGrade grade : LexTokenOr : ts) ->
-            putTk ts *> step ctx' {parseCtxGrade = Just grade}
+            putTokens ts *> step ctx' {grade = Just grade}
           (LexTokenGrade grade : ts) ->
-            putTk ts *> step ctx' {parseCtxGrade = Just grade}
+            putTokens ts *> step ctx' {grade = Just grade}
           (LexTokenSubj _ : _) -> do
             r <- parseCourse ctx'
             go ctx (r : acc)
@@ -411,36 +351,36 @@ parseInner ctx = go ctx []
 parseCourse :: ParseCtx -> ParseM Req
 parseCourse ctx = do
   cs <- go ctx
-  grade <- (getTk >>=) $ \case
+  grade <- (getTokens >>=) $ \case
     (LexTokenGrade grade : ts) ->
-      putTk ts $> Just grade
+      putTokens ts $> Just grade
     (LexTokenGroup [LexTokenGrade grade] : ts) ->
-      putTk ts $> Just grade
-    _ -> pure $ parseCtxGrade ctx
+      putTokens ts $> Just grade
+    _ -> pure ctx.grade
   extra <- do
-    section <- (getTk >>=) $ \case
+    section <- (getTokens >>=) $ \case
       (LexTokenCode section : ts) ->
-        putTk ts $> Just section
+        putTokens ts $> Just section
       (LexTokenGroup [LexTokenCode section] : ts) ->
-        putTk ts $> Just section
+        putTokens ts $> Just section
       (LexTokenGroup [LexTokenSubj component, LexTokenCode section] : ts) ->
-        putTk ts $> Just ("(" <> component <> " " <> section <> ")")
+        putTokens ts $> Just ("(" <> component <> " " <> section <> ")")
       _ -> pure Nothing
-    taken <- (getTk >>=) $ \case
+    taken <- (getTokens >>=) $ \case
       (LexTokenText t : ts)
         | tokenTermSeason t ->
-            putTk ts $> Just t
+            putTokens ts $> Just t
       (LexTokenText "taken" : LexTokenText season : LexTokenText year : ts) ->
-        putTk ts $> Just (season <> " " <> year)
+        putTokens ts $> Just (season <> " " <> year)
       (LexTokenText season : LexTokenText year : ts) ->
-        putTk ts $> Just (season <> " " <> year)
+        putTokens ts $> Just (season <> " " <> year)
       _ -> pure Nothing
     pure $ case (section, taken) of
       (Just section, Just taken) -> Just $ section <> " " <> taken
       (Just section, Nothing) -> Just section
       (Nothing, Just taken) -> Just taken
       (Nothing, Nothing) -> Nothing
-  let crb (CourseName subj code) = parseCtxCRB ctx subj code grade
+  let crb (CourseName subj code) = ctx.crb subj code grade
       r = case cs of
         (c :| []) -> crb c
         (c :| cs) -> ReqOr $ map crb (c : cs)
@@ -448,31 +388,83 @@ parseCourse ctx = do
   pure r'
   where
     go :: ParseCtx -> ParseM (NonEmpty CourseName)
-    go ctx = (getTk >>=) $ \case
+    go ctx = (getTokens >>=) $ \case
       (LexTokenSubj subj : LexTokenCode code : LexTokenSlash : ts) -> do
-        putTk ts
+        putTokens ts
         putSubj subj
         c :| cs <- go ctx
         pure (CourseName subj code :| c : cs)
       (LexTokenSubj subj : LexTokenSlash : ts) -> do
-        putTk ts
+        putTokens ts
         putSubj subj
         (c@(CourseName _ code) :| cs) <- go ctx
         pure (CourseName subj code :| c : cs)
       (LexTokenCode code : LexTokenSlash : ts) -> do
-        putTk ts
+        putTokens ts
         subj <- getSubj
         (c :| cs) <- go ctx
         pure (CourseName subj code :| c : cs)
       (LexTokenSubj subj : LexTokenCode code : ts) -> do
-        putTk ts
+        putTokens ts
         putSubj subj
         pure (CourseName subj code :| [])
       (LexTokenCode code : ts) -> do
-        putTk ts
+        putTokens ts
         subj <- getSubj
         pure (CourseName subj code :| [])
       ts -> error $ "unexpected tokens in parseCourse: " ++ show ts
+
+scrapeSelector :: Selector
+scrapeSelector = AnyTag @: ["class" @= "divTable"]
+
+scrapeCourse :: (Monad m) => ScraperT Text m Course
+scrapeCourse = do
+  subs <- map T.strip <$> texts "div"
+  let (subj, code, comp, units) = case T.splitOn " " (subs !! 1) of
+        [subj, code, comp, units] -> (subj, code, comp, units)
+        _ -> error "failed to find course info"
+      cid = case T.stripPrefix "Course ID: " (subs !! 2) of
+        Just cid -> cid
+        _ -> error "failed to find course id"
+      course =
+        Course
+          { name = CourseName subj code,
+            id = cid,
+            components = T.splitOn "," comp,
+            units = read $ T.unpack units,
+            title = subs !! 3,
+            description = subs !! 4,
+            note = "",
+            offered = [],
+            req = ReqTrue,
+            crosslist = []
+          }
+      course' = execState (traverse_ scrapeCourseOther $ drop 5 subs) course & over #req simplifyReq
+  pure course'
+
+scrapeCourseOther :: Text -> State Course ()
+scrapeCourseOther sub
+  | T.all isSpace sub = pure ()
+  | "[Note: " `T.isPrefixOf` sub = assign #note sub
+  | Just prereqs <- T.stripPrefix "Prereq:" sub =
+      modifying #req (\req -> ReqAnd [req, parse parseCtxPrereq $ lex prereqs])
+  | Just coreqs <- T.stripPrefix "Coreq:" sub =
+      modifying #req (\req -> ReqAnd [req, parse parseCtxCoreq $ lex coreqs])
+  | Just antireqs <- T.stripPrefix "Antireq:" sub =
+      modifying #req (\req -> ReqAnd [req, parse parseCtxAntireq $ lex antireqs])
+  | Just crosslist <- T.stripPrefix "(Cross-listed with " sub =
+      assign #crosslist $ parseCrosslist $ T.init crosslist
+  | Just _online <- T.stripSuffix " offered Online" sub = pure ()
+  | Just _consent <- T.stripSuffix " Consent Required" sub = pure ()
+  | Just _offered <- T.stripPrefix "Offered at " sub = pure ()
+  | Just _offered <- T.stripPrefix "Also offered at " sub = pure ()
+  | otherwise = error $ "unknown text: " ++ show sub
+
+parseCrosslist :: Text -> [CourseName]
+parseCrosslist = map (go . T.splitOn " ") . T.splitOn ", "
+  where
+    go [subj, code] = CourseName subj code
+    go _ = error "bad course in crosslist"
 
 normalizeSpace :: Char -> Char
 normalizeSpace c = if isSpace c then ' ' else c
@@ -480,5 +472,5 @@ normalizeSpace c = if isSpace c then ' ' else c
 main :: IO ()
 main = do
   file <- T.map normalizeSpace . T.decodeLatin1 <$> B.getContents
-  let courses = concat $ scrapeStringLike file $ chroots classesSelector courseScraper
+  let courses = concat $ scrapeStringLike file $ chroots scrapeSelector scrapeCourse
   pPrint courses

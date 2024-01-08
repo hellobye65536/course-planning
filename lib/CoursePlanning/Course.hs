@@ -1,9 +1,11 @@
+{-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
 module CoursePlanning.Course where
 
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
+import Optics (makeFieldLabelsNoPrefix)
 import Text.Read (Lexeme (Ident), Read (readPrec), lift, parens, prec, step)
 import Text.Read.Lex (expect)
 
@@ -11,8 +13,8 @@ data Season = Fall | Winter | Summer
   deriving (Eq, Show, Read)
 
 data CourseName = CourseName
-  { courseSubject :: {-# UNPACK #-} !Text,
-    courseCode :: {-# UNPACK #-} !Text
+  { subj :: {-# UNPACK #-} !Text,
+    code :: {-# UNPACK #-} !Text
   }
   deriving (Eq)
 
@@ -30,16 +32,16 @@ instance Read CourseName where
     CourseName <$> step readPrec <*> step readPrec
 
 data Course = Course
-  { courseName :: {-# UNPACK #-} !CourseName,
-    courseId :: Text,
-    courseComponents :: [Text],
-    courseUnits :: Float,
-    courseTitle :: Text,
-    courseDescription :: Text,
-    courseNote :: Text,
-    courseOffered :: [Season],
-    courseReq :: Req,
-    courseCrosslist :: [CourseName]
+  { name :: {-# UNPACK #-} !CourseName,
+    id :: Text,
+    components :: [Text],
+    units :: Float,
+    title :: Text,
+    description :: Text,
+    note :: Text,
+    offered :: [Season],
+    req :: Req,
+    crosslist :: [CourseName]
   }
   deriving (Show, Read)
 
@@ -61,6 +63,8 @@ pattern ReqCourse' subj code grade = ReqCourse (CourseName subj code) grade
 
 pattern ReqCoCourse' :: Text -> Text -> Req
 pattern ReqCoCourse' subj code = ReqCoCourse (CourseName subj code)
+
+makeFieldLabelsNoPrefix ''Course
 
 simplifyReq :: Req -> Req
 simplifyReq r = case r of
