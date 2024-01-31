@@ -41,6 +41,7 @@ data Course = Course
     note :: Text,
     offered :: [Season],
     req :: Req,
+    antireq :: [AntiReq],
     crosslist :: [CourseName]
   }
   deriving (Show, Read)
@@ -48,7 +49,6 @@ data Course = Course
 data Req
   = ReqCourse CourseName (Maybe Float)
   | ReqCoCourse CourseName
-  | ReqNot Req
   | ReqAnd [Req]
   | ReqOr [Req]
   | ReqNote Text
@@ -64,16 +64,23 @@ pattern ReqCourse' subj code grade = ReqCourse (CourseName subj code) grade
 pattern ReqCoCourse' :: Text -> Text -> Req
 pattern ReqCoCourse' subj code = ReqCoCourse (CourseName subj code)
 
+data AntiReq
+  = AntiReqCourse
+      { courses :: [CourseName],
+        extra :: Maybe Text
+      }
+  | AntiReqNote Text
+  deriving (Show, Read)
+
 makeFieldLabelsNoPrefix ''Course
+
+courseMatches :: CourseName -> Course -> Bool
+courseMatches cid c = cid == c.name || elem cid c.crosslist
 
 simplifyReq :: Req -> Req
 simplifyReq r = case r of
   ReqCourse _ _ -> r
   ReqCoCourse _ -> r
-  ReqNot (ReqNot r) -> simplifyReq r
-  ReqNot ReqTrue -> ReqFalse
-  ReqNot ReqFalse -> ReqTrue
-  ReqNot r -> ReqNot $ simplifyReq r
   ReqAnd rs -> desingleton ReqAnd $ fromMaybe [] $ foldr stepAnd (Just []) rs
   ReqOr rs -> desingleton ReqOr $ fromMaybe [] $ foldr stepOr (Just []) rs
   ReqNote _ -> r
